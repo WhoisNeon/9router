@@ -1,0 +1,52 @@
+name: Sync upstream release tags
+
+# Upstream releases live in another repository, so a tag push there cannot
+# trigger this workflow directly; poll for new release tags instead.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-tags
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge newest upstream release tag into master
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out master with full history
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge newest unmerged upstream release tag
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/decolua/9router.git
+          git fetch --force --tags upstream
+
+          tag="$(git tag --list 'v[0-9]*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | tail -n1)"
+          if [ -z "$tag" ]; then
+            echo "No upstream release tags found"
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$tag" HEAD; then
+            echo "Latest upstream release tag $tag is already merged into master"
+            exit 0
+          fi
+
+          echo "Merging upstream release tag $tag into master"
+          if ! git merge --no-edit "$tag"; then
+            git merge --abort
+            echo "::error::Merge conflict while syncing upstream tag $tag; resolve manually on master"
+            exit 1
+          fi
+
+          git push origin HEAD:master
